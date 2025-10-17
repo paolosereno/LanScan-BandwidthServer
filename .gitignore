@@ -52,3 +52,38 @@ compile_commands.json
 *creator.user*
 
 *_qmlcache.qrc
+
+# Build directories
+build/
+cmake-build-*/
+
+# Compiled executable
+LanScan-BandwidthServer
+LanScan-BandwidthServer.exe
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+
+# IDE files
+.idea/
+.vscode/
+
+# Log files
+*.log
+bandwidth-server.log
+
+# Configuration override
+bandwidth-server-local.conf
+
+# Testing artifacts
+test_*.txt
+*.pcap
+
+# OS files
+.DS_Store
+Thumbs.db
