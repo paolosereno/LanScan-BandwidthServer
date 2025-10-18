@@ -1,6 +1,7 @@
 #include "../include/Protocol.h"
 #include <QStringList>
 #include <QDataStream>
+#include <QIODevice>
 #include <QDateTime>
 
 namespace Protocol {

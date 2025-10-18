@@ -1,7 +1,10 @@
 #include "../include/TcpHandler.h"
 #include "../include/Protocol.h"
 #include "../include/Statistics.h"
+#include <QCoreApplication>
+#include <QThread>
 #include <QDebug>
+#include <QDateTime>
 
 TcpHandler::TcpHandler(QTcpSocket *socket, int maxDuration, QObject *parent)
     : QObject(parent)
@@ -154,20 +157,28 @@ void TcpHandler::startDataTransfer()
         // Start test timer
         m_testTimer->start(m_duration * 1000);
 
-        // Send data as fast as possible
+        // Send data as fast as possible, but limit buffer size
+        const qint64 MAX_BUFFER_SIZE = 100 * 1024 * 1024; // 100 MB max buffer
         while (m_elapsed.elapsed() < m_duration * 1000 && m_socket->state() == QAbstractSocket::ConnectedState) {
+            // Check if buffer is too full, skip writing but process events
+            if (m_socket->bytesToWrite() > MAX_BUFFER_SIZE) {
+                QCoreApplication::processEvents();
+                continue;
+            }
+
             qint64 written = m_socket->write(dataBuffer);
             if (written > 0) {
                 m_bytesTransferred += written;
             }
 
-            // Flush periodically
-            if (m_bytesTransferred % (m_packetSize * 100) == 0) {
-                m_socket->flush();
+            // Process events periodically to keep socket sending data
+            if (m_bytesTransferred % (m_packetSize * 1000) == 0) {
+                QCoreApplication::processEvents();
             }
-
-            QCoreApplication::processEvents();
         }
+
+        // Stop the timer since loop has finished
+        m_testTimer->stop();
 
         m_testEndTime = m_elapsed.elapsed();
         sendResults();
@@ -201,15 +212,42 @@ void TcpHandler::sendResults()
     results.packetsReceived = 0;
     results.packetsExpected = 0;
 
-    m_socket->write(Protocol::generateResultsMessage(results, false));
-    m_socket->flush();
+    // Wait for output buffer to be completely empty before sending results
+    qint64 bytesToWrite = m_socket->bytesToWrite();
+    if (bytesToWrite > 0) {
+        logMessage(QString("Waiting for %1 bytes to be sent before sending results...").arg(bytesToWrite));
+
+        // Wait until buffer is completely drained (up to 30 seconds max)
+        int waitCount = 0;
+        while (m_socket->bytesToWrite() > 0 && waitCount < 3000) {
+            // Just process events to allow data to be sent
+            QCoreApplication::processEvents();
+            QThread::msleep(10);
+            waitCount++;
+        }
+
+        qint64 remaining = m_socket->bytesToWrite();
+        if (remaining > 0) {
+            logMessage(QString("Warning: %1 bytes still in buffer after waiting 30 seconds").arg(remaining));
+        } else {
+            logMessage(QString("Output buffer drained in %1 ms, sending results now").arg(waitCount * 10));
+        }
+    }
+
+    QByteArray resultsMsg = Protocol::generateResultsMessage(results, false);
+    qint64 written = m_socket->write(resultsMsg);
+
+    if (written == -1) {
+        logMessage("Failed to write results message");
+    } else {
+        m_socket->flush();
+        logMessage(QString("Results queued for sending: %1 bytes written").arg(written));
+    }
 
     emit testCompleted(m_bytesTransferred, throughput);
 
-    // Close connection after sending results
-    m_socket->disconnectFromHost();
+    // Don't close connection - let client close when ready
     setState(State::Finished);
-    emit finished();
 }
 
 void TcpHandler::setState(State newState)
@@ -221,5 +259,6 @@ void TcpHandler::setState(State newState)
 
 void TcpHandler::logMessage(const QString &message)
 {
-    qDebug() << "[TCP" << m_clientAddress << "]" << message;
+    QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
+    qDebug() << "[" << timestamp << "] [TCP" << m_clientAddress << "]" << message;
 }
